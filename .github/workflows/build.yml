@@ -58,7 +58,7 @@ jobs:
           test -f project/app/src/main/AndroidManifest.xml
           test -f project/app/src/main/java/com/example/virtualjoystickgps/MainActivity.kt
           test -f project/app/src/main/java/com/example/virtualjoystickgps/JoystickOverlayService.kt
-      - name: Configure app build
+          cat > project/app/build.gradle.kts <<'EOF'
         shell: bash
         run: |
           python3 - <<'PY'
