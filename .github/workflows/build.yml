@@ -49,7 +49,9 @@ jobs:
         shell: bash
         run: |
           set -e
-          ZIP_FILE="$(find . -maxdepth 2 -type f -name '*.zip' -print -quit)"
+          
+           ZIP_FILE="./VirtualJoystickGPS_V2_Editable_Coordinates_FIXED.zip"
+
           test -n "$ZIP_FILE"
           mkdir -p project
           unzip -q "$ZIP_FILE" -d project
