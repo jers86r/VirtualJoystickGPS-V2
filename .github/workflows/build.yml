@@ -11,7 +11,6 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-22.04
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -35,87 +34,39 @@ jobs:
             exit 1
           fi
           yes | "$SDKMANAGER" --sdk_root="$SDK" --licenses || true
-          "$SDKMANAGER" --sdk_root="$SDK" --install \
-            'platform-tools' \
-            'platforms;android-35' \
-            'build-tools;35.0.0'
+          "$SDKMANAGER" --sdk_root="$SDK" --install 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
 
-      - name: Extract Android project
+      - name: Extract corrected project
         shell: bash
         run: |
           set -euo pipefail
-          ZIP_FILE='./VirtualJoystickGPS_V2_Editable_Coordinates_FINAL.zip'
-          if [ ! -f "$ZIP_FILE" ]; then
-            echo "ERROR: Project ZIP not found: $ZIP_FILE"
-            find . -maxdepth 2 -type f -print
-            exit 1
-          fi
+          ZIP_FILE='./VirtualJoystickGPS_V2_Editable_Coordinates_MOCKFIX.zip'
+          test -f "$ZIP_FILE" || { echo "Missing $ZIP_FILE in repository root"; exit 1; }
           mkdir -p project
           unzip -q "$ZIP_FILE" -d project
-          test -f project/settings.gradle.kts
-          test -f project/build.gradle.kts
-          test -f project/app/build.gradle.kts
-          test -f project/app/src/main/java/com/example/virtualjoystickgps/MainActivity.kt
-          test -f project/app/src/main/java/com/example/virtualjoystickgps/JoystickOverlayService.kt
-
-      - name: Fix Java and Kotlin JVM target compatibility
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          p = Path("project/app/build.gradle.kts")
-          text = p.read_text()
-          needle = "    defaultConfig {"
-          block = "\n".join([
-              "    // Keep Java and Kotlin bytecode targets aligned in CI.",
-              "    compileOptions {",
-              "        sourceCompatibility = JavaVersion.VERSION_17",
-              "        targetCompatibility = JavaVersion.VERSION_17",
-              "    }",
-              "    kotlinOptions {",
-              "        jvmTarget = \"17\"",
-              "    }",
-              "",
-              "",
-          ])
-          if "sourceCompatibility = JavaVersion.VERSION_17" not in text:
-              if needle not in text:
-                  raise SystemExit("Could not find defaultConfig block in app/build.gradle.kts")
-              text = text.replace(needle, block + needle, 1)
-              p.write_text(text)
-          print(p.read_text())
-          PY
-
-      - name: Verify coordinate editor source
-        shell: bash
-        run: |
-          set -euo pipefail
-          grep -n -i -E 'current.*location|apply coordinates|latitude|longitude' project/app/src/main/java/com/example/virtualjoystickgps/MainActivity.kt
+          test -f project/app/src/main/AndroidManifest.xml
+          grep -q 'android.permission.ACCESS_MOCK_LOCATION' project/app/src/main/AndroidManifest.xml
+          grep -q 'sourceCompatibility = JavaVersion.VERSION_17' project/app/build.gradle.kts
+          grep -q 'jvmTarget = "17"' project/app/build.gradle.kts
+          grep -qi 'latitude' project/app/src/main/java/com/example/virtualjoystickgps/MainActivity.kt
 
       - name: Build APK
         shell: bash
-        run: |
-          set -euo pipefail
-          gradle -p project --no-daemon assembleDebug
+        run: gradle -p project --no-daemon assembleDebug
 
-      - name: Verify APK exists
+      - name: Verify APK
         shell: bash
-        run: |
-          set -euo pipefail
-          test -f project/app/build/outputs/apk/debug/app-debug.apk
-          ls -lh project/app/build/outputs/apk/debug/app-debug.apk
+        run: test -f project/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: VirtualJoystickGPS-V2-Editable-APK
+          name: VirtualJoystickGPS-V2-MockLocation-Fixed
           path: project/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 7
