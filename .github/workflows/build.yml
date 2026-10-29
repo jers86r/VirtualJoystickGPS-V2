@@ -1,6 +1,4 @@
-
 name: Build Virtual Joystick GPS APK
-
 on:
   workflow_dispatch:
   push:
