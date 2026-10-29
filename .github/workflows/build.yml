@@ -2,9 +2,9 @@
 name: Build Virtual Joystick GPS APK
 
 on:
-  workflow_dispatch:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -21,132 +21,75 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
 
       - name: Configure Android SDK
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
           SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
 
           SDKMANAGER="$(find "$SDK/cmdline-tools" -type f -name sdkmanager 2>/dev/null | sort -V | tail -n 1)"
-          test -n "$SDKMANAGER"
+          if [ -z "$SDKMANAGER" ]; then
+            echo "ERROR: Android sdkmanager not found"
+            exit 1
+          fi
 
           yes | "$SDKMANAGER" --sdk_root="$SDK" --licenses || true
           "$SDKMANAGER" --sdk_root="$SDK" --install \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
+            'platform-tools' \
+            'platforms;android-35' \
+            'build-tools;35.0.0'
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.7"
+          gradle-version: '8.7'
 
-      - name: Extract Android project
+      - name: Extract editable-coordinate Android project
         shell: bash
         run: |
-          set -e
-          
-           ZIP_FILE="./VirtualJoystickGPS_V2_Editable_Coordinates_FIXED.zip"
+          set -euo pipefail
+          ZIP_FILE='./VirtualJoystickGPS_V2_Editable_Coordinates_FINAL.zip'
 
-          test -n "$ZIP_FILE"
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "ERROR: Project ZIP not found: $ZIP_FILE"
+            find . -maxdepth 2 -type f -print
+            exit 1
+          fi
+
           mkdir -p project
           unzip -q "$ZIP_FILE" -d project
-          test -f project/app/src/main/AndroidManifest.xml
+
+          test -f project/settings.gradle.kts
+          test -f project/build.gradle.kts
+          test -f project/app/build.gradle.kts
           test -f project/app/src/main/java/com/example/virtualjoystickgps/MainActivity.kt
           test -f project/app/src/main/java/com/example/virtualjoystickgps/JoystickOverlayService.kt
-          cat > project/app/build.gradle.kts <<'EOF'
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
 
-          manifest = Path("project/app/src/main/AndroidManifest.xml")
-          s = manifest.read_text()
-
-          permission = '    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />'
-          if "android.permission.FOREGROUND_SERVICE_LOCATION" not in s:
-              s = s.replace(
-                  '    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />',
-                  '    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n' + permission
-              )
-
-          pattern = r'(<service\s+android:name="\.JoystickOverlayService"\s+android:exported="false")\s*/>'
-          s, count = re.subn(
-              pattern,
-              r'\1 android:foregroundServiceType="location" />',
-              s
-          )
-
-          if count == 0 and 'android:foregroundServiceType="location"' not in s:
-              raise SystemExit("Could not configure JoystickOverlayService in manifest")
-
-          manifest.write_text(s)
-
-          activity = Path("project/app/src/main/java/com/example/virtualjoystickgps/MainActivity.kt")
-          a = activity.read_text()
-
-          old = 'startService(Intent(this@MainActivity, JoystickOverlayService::class.java).setAction(JoystickOverlayService.ACTION_START))'
-          new = '''val serviceIntent = Intent(this@MainActivity, JoystickOverlayService::class.java)
-                      .setAction(JoystickOverlayService.ACTION_START)
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                      startForegroundService(serviceIntent)
-                  } else {
-                      startService(serviceIntent)
-                  }'''
-
-          if old in a:
-              a = a.replace(old, new)
-              activity.write_text(a)
-          elif "startForegroundService(serviceIntent)" not in a:
-              raise SystemExit("Could not update the joystick service start code")
-
-          print("Foreground location service configuration updated.")
-          PY
-
-      - name: Configure app build
-        shell: bash
-        run: |
-          cat > project/app/build.gradle.kts <<'EOF'
-          plugins {
-              id("com.android.application")
-              id("org.jetbrains.kotlin.android")
-          }
-
-          android {
-              namespace = "com.example.virtualjoystickgps"
-              compileSdk = 35
-
-              defaultConfig {
-                  applicationId = "com.example.virtualjoystickgps"
-                  minSdk = 26
-                  targetSdk = 35
-                  versionCode = 3
-                  versionName = "2.1"
-              }
-
-              compileOptions {
-                  sourceCompatibility = JavaVersion.VERSION_17
-                  targetCompatibility = JavaVersion.VERSION_17
-              }
-
-              kotlinOptions {
-                  jvmTarget = "17"
-              }
-          }
-          EOF
+          echo "Checking coordinate editor..."
+          grep -n 'USE MY CURRENT GPS LOCATION\|APPLY COORDINATES & START JOYSTICK\|Latitude' \
+            project/app/src/main/java/com/example/virtualjoystickgps/MainActivity.kt
 
       - name: Build APK
-        run: gradle -p project assembleDebug
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle -p project --no-daemon assembleDebug
 
-      - name: Upload APK
+      - name: Verify APK exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f project/app/build/outputs/apk/debug/app-debug.apk
+          ls -lh project/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: VirtualJoystickGPS-V2-APK
+          name: VirtualJoystickGPS-V2-Editable-APK
           path: project/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 7
