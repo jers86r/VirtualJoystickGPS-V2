@@ -1,4 +1,3 @@
-
 name: Build Virtual Joystick GPS APK
 
 on:
@@ -30,13 +29,11 @@ jobs:
           SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
-
           SDKMANAGER="$(find "$SDK/cmdline-tools" -type f -name sdkmanager 2>/dev/null | sort -V | tail -n 1)"
           if [ -z "$SDKMANAGER" ]; then
             echo "ERROR: Android sdkmanager not found"
             exit 1
           fi
-
           yes | "$SDKMANAGER" --sdk_root="$SDK" --licenses || true
           "$SDKMANAGER" --sdk_root="$SDK" --install \
             'platform-tools' \
@@ -48,30 +45,59 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Extract editable-coordinate Android project
+      - name: Extract Android project
         shell: bash
         run: |
           set -euo pipefail
           ZIP_FILE='./VirtualJoystickGPS_V2_Editable_Coordinates_FINAL.zip'
-
           if [ ! -f "$ZIP_FILE" ]; then
             echo "ERROR: Project ZIP not found: $ZIP_FILE"
             find . -maxdepth 2 -type f -print
             exit 1
           fi
-
           mkdir -p project
           unzip -q "$ZIP_FILE" -d project
-
           test -f project/settings.gradle.kts
           test -f project/build.gradle.kts
           test -f project/app/build.gradle.kts
           test -f project/app/src/main/java/com/example/virtualjoystickgps/MainActivity.kt
           test -f project/app/src/main/java/com/example/virtualjoystickgps/JoystickOverlayService.kt
 
-          echo "Checking coordinate editor..."
-          grep -n 'USE MY CURRENT GPS LOCATION\|APPLY COORDINATES & START JOYSTICK\|Latitude' \
-            project/app/src/main/java/com/example/virtualjoystickgps/MainActivity.kt
+      - name: Fix Java and Kotlin JVM target compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("project/app/build.gradle.kts")
+          text = p.read_text()
+          needle = "    defaultConfig {"
+          block = "\n".join([
+              "    // Keep Java and Kotlin bytecode targets aligned in CI.",
+              "    compileOptions {",
+              "        sourceCompatibility = JavaVersion.VERSION_17",
+              "        targetCompatibility = JavaVersion.VERSION_17",
+              "    }",
+              "    kotlinOptions {",
+              "        jvmTarget = \"17\"",
+              "    }",
+              "",
+              "",
+          ])
+          if "sourceCompatibility = JavaVersion.VERSION_17" not in text:
+              if needle not in text:
+                  raise SystemExit("Could not find defaultConfig block in app/build.gradle.kts")
+              text = text.replace(needle, block + needle, 1)
+              p.write_text(text)
+          print(p.read_text())
+          PY
+
+      - name: Verify coordinate editor source
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -n -i -E 'current.*location|apply coordinates|latitude|longitude' project/app/src/main/java/com/example/virtualjoystickgps/MainActivity.kt
 
       - name: Build APK
         shell: bash
