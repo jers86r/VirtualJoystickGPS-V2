@@ -32,10 +32,7 @@ jobs:
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
 
           SDKMANAGER="$(find "$SDK/cmdline-tools" -type f -name sdkmanager 2>/dev/null | sort -V | tail -n 1)"
-          if [ -z "$SDKMANAGER" ]; then
-            echo "ERROR: sdkmanager not found"
-            exit 1
-          fi
+          test -n "$SDKMANAGER"
 
           yes | "$SDKMANAGER" --sdk_root="$SDK" --licenses || true
           "$SDKMANAGER" --sdk_root="$SDK" --install \
@@ -53,40 +50,64 @@ jobs:
         run: |
           set -e
           ZIP_FILE="$(find . -maxdepth 2 -type f -name '*.zip' -print -quit)"
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: Project ZIP not found"
-            exit 1
-          fi
-
+          test -n "$ZIP_FILE"
           mkdir -p project
           unzip -q "$ZIP_FILE" -d project
+          test -f project/app/src/main/AndroidManifest.xml
+          test -f project/app/src/main/java/com/example/virtualjoystickgps/MainActivity.kt
+          test -f project/app/src/main/java/com/example/virtualjoystickgps/JoystickOverlayService.kt
 
-          if [ ! -f project/app/src/main/AndroidManifest.xml ]; then
-            echo "ERROR: AndroidManifest.xml not found"
-            exit 1
-          fi
-
-      - name: Add mock location permission
+      - name: Fix Android service configuration
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
-          p = Path("project/app/src/main/AndroidManifest.xml")
-          s = p.read_text()
-          permission = '    <uses-permission android:name="android.permission.ACCESS_MOCK_LOCATION" />'
+          manifest = Path("project/app/src/main/AndroidManifest.xml")
+          s = manifest.read_text()
 
-          if "android.permission.ACCESS_MOCK_LOCATION" not in s:
-              pos = s.find(">")
-              if pos < 0:
-                  raise SystemExit("ERROR: Invalid AndroidManifest.xml")
-              s = s[:pos + 1] + "\n" + permission + s[pos + 1:]
-              p.write_text(s)
+          permission = '    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />'
+          if "android.permission.FOREGROUND_SERVICE_LOCATION" not in s:
+              s = s.replace(
+                  '    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />',
+                  '    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n' + permission
+              )
 
-          print("Mock location permission added.")
+          pattern = r'(<service\s+android:name="\.JoystickOverlayService"\s+android:exported="false")\s*/>'
+          s, count = re.subn(
+              pattern,
+              r'\1 android:foregroundServiceType="location" />',
+              s
+          )
+
+          if count == 0 and 'android:foregroundServiceType="location"' not in s:
+              raise SystemExit("Could not configure JoystickOverlayService in manifest")
+
+          manifest.write_text(s)
+
+          activity = Path("project/app/src/main/java/com/example/virtualjoystickgps/MainActivity.kt")
+          a = activity.read_text()
+
+          old = 'startService(Intent(this@MainActivity, JoystickOverlayService::class.java).setAction(JoystickOverlayService.ACTION_START))'
+          new = '''val serviceIntent = Intent(this@MainActivity, JoystickOverlayService::class.java)
+                      .setAction(JoystickOverlayService.ACTION_START)
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                      startForegroundService(serviceIntent)
+                  } else {
+                      startService(serviceIntent)
+                  }'''
+
+          if old in a:
+              a = a.replace(old, new)
+              activity.write_text(a)
+          elif "startForegroundService(serviceIntent)" not in a:
+              raise SystemExit("Could not update the joystick service start code")
+
+          print("Foreground location service configuration updated.")
           PY
 
-      - name: Configure Java and Kotlin targets
+      - name: Configure app build
         shell: bash
         run: |
           cat > project/app/build.gradle.kts <<'EOF'
@@ -103,8 +124,8 @@ jobs:
                   applicationId = "com.example.virtualjoystickgps"
                   minSdk = 26
                   targetSdk = 35
-                  versionCode = 2
-                  versionName = "2.0"
+                  versionCode = 3
+                  versionName = "2.1"
               }
 
               compileOptions {
@@ -120,13 +141,6 @@ jobs:
 
       - name: Build APK
         run: gradle -p project assembleDebug
-
-      - name: Verify mock location permission
-        shell: bash
-        run: |
-          APK="project/app/build/outputs/apk/debug/app-debug.apk"
-          test -f "$APK"
-          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump permissions "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
